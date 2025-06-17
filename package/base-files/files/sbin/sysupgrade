@@ -19,6 +19,7 @@ export CONF_IMAGE=
 export CONF_BACKUP_LIST=0
 export CONF_BACKUP=
 export CONF_RESTORE=
+export IGNORE_MINOR_COMPAT=0
 export NEED_IMAGE=
 export HELP=0
 export FORCE=0
@@ -44,6 +45,7 @@ while [ -n "$1" ]; do
 		-F|--force) export FORCE=1;;
 		-T|--test) export TEST=1;;
 		-h|--help) export HELP=1; break;;
+		--ignore-minor-compat-version) export IGNORE_MINOR_COMPAT=1;;
 		-*)
 			echo "Invalid option: $1" >&2
 			exit 1
@@ -80,6 +82,8 @@ upgrade-option:
 	             Verify image and config .tar.gz but do not actually flash.
 	-F | --force
 	             Flash image even if image checks fail, this is dangerous!
+	--ignore-minor-compat-version
+		     Flash image even if the minor compat version is incompatible.
 	-q           less verbose
 	-v           more verbose
 	-h | --help  display this help
@@ -131,12 +135,19 @@ list_changed_conffiles() {
 	done
 }
 
+list_static_conffiles() {
+	local filter=$1
+
+	find $(sed -ne '/^[[:space:]]*$/d; /^#/d; p' \
+		/etc/sysupgrade.conf /lib/upgrade/keep.d/* 2>/dev/null) \
+		\( -type f -o -type l \) $filter 2>/dev/null
+}
+
 add_conffiles() {
 	local file="$1"
-	( find $(sed -ne '/^[[:space:]]*$/d; /^#/d; p' \
-		/etc/sysupgrade.conf /lib/upgrade/keep.d/* 2>/dev/null) \
-		\( -type f -o -type l \) $find_filter 2>/dev/null;
-	  list_changed_conffiles ) | sort -u > "$file"
+
+	( list_static_conffiles "$find_filter"; list_changed_conffiles ) |
+		sort -u > "$file"
 	return 0
 }
 
@@ -154,9 +165,7 @@ add_overlayfiles() {
 
 		# backup files from /etc/sysupgrade.conf and /lib/upgrade/keep.d, but
 		# ignore those aready controlled by opkg conffiles
-		find $(sed -ne '/^[[:space:]]*$/d; /^#/d; p' \
-			/etc/sysupgrade.conf /lib/upgrade/keep.d/* 2>/dev/null) \
-			\( -type f -o -type l \) 2>/dev/null | sort -u |
+		list_static_conffiles | sort -u |
 			grep -h -v -x -F -f $conffiles > "$keepfiles"
 
 		# backup conffiles, but only those changed if '-u'
@@ -216,7 +225,7 @@ include /lib/upgrade
 do_save_conffiles() {
 	local conf_tar="$1"
 
-	[ -z "$(rootfs_type)" ] && {
+	[ "$(rootfs_type)" = "tmpfs" ] && {
 		echo "Cannot save config while running from ramdisk." >&2
 		ask_bool 0 "Abort" && exit
 		rm -f "$conf_tar"
@@ -282,6 +291,7 @@ if [ -n "$CONF_RESTORE" ]; then
 	fi
 
 	[ "$VERBOSE" -gt 1 ] && TAR_V="v" || TAR_V=""
+	v "Restoring config files..."
 	tar -C / -x${TAR_V}zf "$CONF_RESTORE"
 	exit $?
 fi
